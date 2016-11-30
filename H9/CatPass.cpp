@@ -224,22 +224,20 @@ namespace {
     analysis(Module& m_) : m(m_) {
       has_unsupported_instruction = false;
       for (Function& f : m) {
-        for (BasicBlock& b : f) {
-          for (Instruction& i : b) {
-            Instruction* inst = &i;
-            const char* message = nullptr;
-            if (isa<SelectInst>(inst)) message = "use PHINode; SelectInst";
-            if (isa<SwitchInst>(inst)) message = "use BranchInst; SwitchInst";
-            if (isa<ResumeInst>(inst)) message = "exception ResumeInst";
-            if (isa<CatchReturnInst>(inst)) message = "exception CatchReturnInst";
-            if (isa<CatchSwitchInst>(inst)) message = "exception CatchSwitchInst";
-            if (auto* pcall = dyn_cast<CallInst>(inst))
-              if (pcall->getCalledFunction() == nullptr)
-                message = "Indirect calls";
-            if (message) {
-              errs() << message << " not supported\n";
-              has_unsupported_instruction = true;
-            }
+        for (auto it = inst_begin(f); it != inst_end(f); ++it) {
+          Instruction* inst = &*it;
+          const char* message = nullptr;
+          if (isa<SelectInst>(inst)) message = "use PHINode; SelectInst";
+          if (isa<SwitchInst>(inst)) message = "use BranchInst; SwitchInst";
+          if (isa<ResumeInst>(inst)) message = "exception ResumeInst";
+          if (isa<CatchReturnInst>(inst)) message = "exception CatchReturnInst";
+          if (isa<CatchSwitchInst>(inst)) message = "exception CatchSwitchInst";
+          if (auto* pcall = dyn_cast<CallInst>(inst))
+            if (pcall->getCalledFunction() == nullptr)
+              message = "Indirect calls";
+          if (message) {
+            errs() << message << " not supported\n";
+            has_unsupported_instruction = true;
           }
         }
       }
