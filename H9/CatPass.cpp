@@ -221,8 +221,7 @@ namespace {
       }
     }
 
-    analysis(Module& m_) : m(m_) {
-      has_unsupported_instruction = false;
+    analysis(Module& m_) : m(m_), has_unsupported_instruction(false) {
       for (Function& f : m) {
         for (auto it = inst_begin(f); it != inst_end(f); ++it) {
           Instruction* inst = &*it;
