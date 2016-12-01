@@ -534,6 +534,96 @@ namespace {
     }
   };
 
+  /*
+     For every functions that are definitely called with different arguments,
+     make a clone for each call-site so that each clone is invoked with more
+     specific arguments. This improves the precision of latter analysis and
+     also creates some optimization opportunities.
+
+     naive.c and called.c are two cases that can be improved by this cloning
+     operation. I am not sure whether they count as 'fundamentally different'
+     because they are both the result of cloning transformation, yet the results
+     are improved due to different reasons.
+
+     In naive.c, h(_) is called with two different CAT variables. When h(_)
+     invokes g(_), the two CAT variables are merged since it is invoked from
+     the same callsite (in h(_)). This comes from the limitation of 1-context
+     sensitivity. However, by cloning h(_), the arguments are no longer merged
+     in g(_) since they now come from different callsites.
+
+     Before:
+       σ(#a{h.%c,%call2}) = { #a{main.%call-1,*} }
+       σ(#a{h.%c,%call3}) = { #a{main.%call1-1,*} }
+       σ(#a{g.%a,%call}) = { #a{main.%call1-1,*} #a{main.%call-1,*} }
+
+     After:
+       σ(#a{h_spec0.%c,%call3}) = { #a{main.%call1-1,*} }
+       σ(#a{h_spec1.%c,%call2}) = { #a{main.%call-1,*} }
+       σ(#a{g.%a,%call}) = { #a{main.%call1-1,*} }              ; this is from h_spec0
+       σ(#a{g.%a,%call}) = { #a{main.%call-1,*} }               ; this is from h_spec1
+
+     In cross.c, the situation is a little different. In the original code, the
+     first argument of use(CATData a, CATData b) is the same across different calls
+     while the second argument of use(CATData a, CATData b) is not. Thus, the analysis
+     deduce that CAT_get_signed_value(a) is constant but not CAT_get_signed_value(b).
+     By cloning use(_, _), it is now the case that all use_speci(CATData a, CATData b)
+     are only invoked by a fixed value. Thus both CAT_get_signed_value(a) and
+     CAT_get_signed_value(b) are constant for each use_speci.
+
+     Before:
+       σ(#a{use.%x,%call3}) = { #a{main.%call-1,*} }            ; constant for every call
+       σ(#a{use.%x,%call4}) = { #a{main.%call-1,*} }
+       σ(#a{use.%y,%call3}) = { #a{main.%call1-1,*} }           ; non-constant for different
+       σ(#a{use.%y,%call4}) = { #a{main.%call2-1,*} }           ; calls
+
+     After:
+       σ(#a{use_spec0.%x,%call4}) = { #a{main.%call-1,*} }      ; constant (only one call)
+       σ(#a{use_spec0.%y,%call4}) = { #a{main.%call2-1,*} }     ; the same
+       σ(#a{use_spec1.%x,%call3}) = { #a{main.%call-1,*} }      ; ditto
+       σ(#a{use_spec1.%y,%call3}) = { #a{main.%call1-1,*} }     ; ditto
+  */
+  void function_specialize1(Module& m) {
+    std::vector<std::pair<Function*, std::vector<CallInst*>>> to_modify;
+    std::vector<CallInst*> callsites;
+    for (auto& f : m) {
+      for (auto& b : f) {
+        for (auto& i :b) {
+          if (auto* pcall = dyn_cast<CallInst>(&i)) {
+            Function* callee = pcall->getCalledFunction();
+            if (callee == nullptr) continue;
+            StringRef name = callee->getName();
+            if (name == catlang[CAT_create]) {}
+            else if (name == catlang[CAT_add] || name == catlang[CAT_sub]) {}
+            else if (name == catlang[CAT_get]) {}
+            else if (not callee->empty()) callsites.push_back(pcall);
+          }
+        }
+      }
+    }
+    for (Function& f : m) {
+      if (f.empty() || f.getName() == catlang[CAT_create] || f.getName() == catlang[CAT_add] || f.getName() == catlang[CAT_sub] || f.getName() == catlang[CAT_get]) continue;
+      // Perhaps we need to set an upper limit for callsite_cnt
+      to_modify.push_back({&f, {}});
+      for (auto* pcall : callsites) {
+        if (pcall->getCalledFunction() == &f)
+          to_modify.back().second.push_back(pcall);
+      }
+    }
+    for (auto& pr : to_modify) {
+      int i = -1;
+      Function* from = pr.first;
+      for (CallInst* caller : pr.second) {
+        ++i;
+        ValueToValueMapTy vmap;
+        Function* to = CloneFunction(from, vmap, true, nullptr);
+        to->setLinkage(from->getLinkage());
+        to->setName(std::string(from->getName()) + "_spec" + std::to_string(i));
+        m.getFunctionList().push_back(to);
+        caller->setCalledFunction(to);
+      }
+    }
+  }
+
   void constant_propagate(const std::unordered_map<Value*, pvalue_t>& collapsed_store, Module& m) {
     std::vector<std::pair<Instruction*, ConstantInt*>> to_modify;
     for (const auto& pr : collapsed_store) {
@@ -714,6 +804,7 @@ namespace {
         errs() << "Function 'main' not found\n";
         return false;
       }
+      function_specialize1(m);
       analysis AA(m);
       bool success = AA.compute(*m.getFunction("main"));
       if (not success) { errs() << "Analysis not success.\n"; return false; }
