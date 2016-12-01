@@ -668,10 +668,9 @@ namespace {
 
   void dead_code_elim(const std::unordered_map<Value*, pvalue_t>& collapsed_store, Module& m) {
     std::vector<Instruction*> to_modify;
+    std::unordered_set<Value*> alives;
     for (Function& f : m) {
       if (f.empty()) continue;
-
-      std::unordered_set<Value*> alives;
       for (auto it = inst_begin(f); it != inst_end(f); ++it) {
         auto* pcall = dyn_cast<CallInst>(&*it);
         if (not pcall) continue;
@@ -685,6 +684,8 @@ namespace {
             alives.insert(std::get<0>(l));
         }
       }
+    }
+    for (Function& f : m) {
       for (auto it = inst_begin(f); it != inst_end(f); ++it)
         if (auto* pcall = dyn_cast<CallInst>(&*it))
           if (pcall->getCalledFunction()->getName() == catlang[CAT_create])
